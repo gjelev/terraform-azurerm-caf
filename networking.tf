@@ -139,8 +139,10 @@ module "public_ip_addresses" {
   sku                        = try(each.value.sku, "Basic")
   sku_tier                   = try(each.value.sku_tier, null)
   tags                       = try(each.value.tags, null)
-  # Zone behavior kept to support smooth migration to azurerm 3.x
-  zones = try(each.value.sku, "Basic") == "Basic" ? [] : try(each.value.zones, null) == null ? ["1", "2", "3"] : each.value.zones
+    # Apply cross-attribute specific configuration for ZONES
+  #  If SKU="Basic", set zones=[]
+  #  else zones=each.value.zones   # tackle further zone-attribute specific logic down inside the resource
+  zones = try(each.value.sku, "Basic") == "Basic" ? [] : try(each.value.zones,["1","2","3"])
 
   base_tags           = local.global_settings.inherit_tags
   resource_group      = local.combined_objects_resource_groups[try(each.value.resource_group.lz_key, local.client_config.landingzone_key)][try(each.value.resource_group_key, each.value.resource_group.key)]
@@ -212,7 +214,7 @@ resource "azurerm_virtual_network_peering" "peering" {
   name                         = azurecaf_name.peering[each.key].result
   virtual_network_name         = can(each.value.from.virtual_network_name) ? each.value.from.virtual_network_name : local.combined_objects_networking[try(each.value.from.lz_key, local.client_config.landingzone_key)][each.value.from.vnet_key].name
   resource_group_name          = can(each.value.from.resource_group_name) ? each.value.from.resource_group_name : local.combined_objects_networking[try(each.value.from.lz_key, local.client_config.landingzone_key)][each.value.from.vnet_key].resource_group_name
-  remote_virtual_network_id    = can(each.value.to.remote_virtual_network_id) ? each.value.to.remote_virtual_network_id : local.combined_objects_networking[try(each.value.to.lz_key, local.client_config.landingzone_key)][each.value.to.vnet_key].id
+  remote_virtual_network_id    = can(each.value.to.remote_virtual_network_id) || can(each.value.to.id) ? try(each.value.to.remote_virtual_network_id, each.value.to.id) : local.combined_objects_networking[try(each.value.to.lz_key, local.client_config.landingzone_key)][each.value.to.vnet_key].id  
   allow_virtual_network_access = try(each.value.allow_virtual_network_access, true)
   allow_forwarded_traffic      = try(each.value.allow_forwarded_traffic, false)
   allow_gateway_transit        = try(each.value.allow_gateway_transit, false)
