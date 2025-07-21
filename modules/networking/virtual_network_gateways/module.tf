@@ -22,18 +22,13 @@ resource "azurerm_virtual_network_gateway" "vngw" {
   # The following options may change depending upon SKU type. Check product documentation
   sku           = var.settings.sku
   active_active = try(var.settings.active_active, null)
-  enable_bgp    = try(var.settings.enable_bgp, null)
   #vpn_type defaults to 'RouteBased'. Type 'PolicyBased' supported only by Basic SKU
   vpn_type = try(var.settings.vpn_type, null)
   tags     = local.tags
 
   #Create multiple IPs only if active-active mode is enabled.
   dynamic "ip_configuration" {
-    for_each = {
-      for key, value in try(var.settings.ip_configuration, {}) : key => value
-      if can(value.subnet_id) || can(value.vnet_key)
-    }
-
+    for_each = { for key, value in try(var.settings.ip_configuration, {}) : key => value if can(value.subnet_id) || can(value.vnet_key) }
     content {
       name                          = ip_configuration.value.ipconfig_name
       public_ip_address_id          = can(ip_configuration.value.public_ip_address_id) || can(ip_configuration.value.public_ip_address_key) == false ? try(ip_configuration.value.public_ip_address_id, null) : var.public_ip_addresses[try(ip_configuration.value.lz_key, var.client_config.landingzone_key)][ip_configuration.value.public_ip_address_key].id
@@ -42,11 +37,7 @@ resource "azurerm_virtual_network_gateway" "vngw" {
     }
   }
   dynamic "ip_configuration" {
-    for_each = {
-      for key, value in try(var.settings.ip_configuration, {}) : key => value
-      if can(value.subnet_key)
-    }
-
+    for_each = { for key, value in try(var.settings.ip_configuration, {}) : key => value if can(value.subnet_key) }
     content {
       name                          = ip_configuration.value.ipconfig_name
       public_ip_address_id          = can(ip_configuration.value.public_ip_address_id) || can(ip_configuration.value.public_ip_address_key) == false ? try(ip_configuration.value.public_ip_address_id, null) : var.public_ip_addresses[try(ip_configuration.value.lz_key, var.client_config.landingzone_key)][ip_configuration.value.public_ip_address_key].id
@@ -56,7 +47,7 @@ resource "azurerm_virtual_network_gateway" "vngw" {
   }
 
   dynamic "vpn_client_configuration" {
-    for_each = can(var.settings.vpn_client_configuration) ? [var.settings.vpn_client_configuration[keys(var.settings.vpn_client_configuration)[0]]] : []
+    for_each = try(var.settings.vpn_client_configuration, {})
     content {
       address_space        = vpn_client_configuration.value.address_space
       vpn_auth_types       = try(vpn_client_configuration.value.vpn_auth_types, null)
@@ -69,45 +60,33 @@ resource "azurerm_virtual_network_gateway" "vngw" {
       radius_server_address = try(vpn_client_configuration.value.radius_server_address, null)
       radius_server_secret  = try(vpn_client_configuration.value.radius_server_secret, null)
 
+      # root_certificates can be passed as public_cert_data, public_cert_data_file, or via public_cert_data_from_var
       dynamic "root_certificate" {
         for_each = can(vpn_client_configuration.value.root_certificate) ? [1] : []
-
         content {
           name             = vpn_client_configuration.value.root_certificate.name
           public_cert_data = vpn_client_configuration.value.root_certificate.public_cert_data
         }
       }
       dynamic "root_certificate" {
-        for_each = {
-          for key, value in try(vpn_client_configuration.value.root_certificates, {}) : key => value
-          if can(value.public_cert_data)
-        }
-
+        for_each = { for key, value in try(vpn_client_configuration.value.root_certificates, {}) : key => value if can(value.public_cert_data) }
         content {
           name             = root_certificate.value.name
           public_cert_data = root_certificate.value.public_cert_data
         }
       }
       dynamic "root_certificate" {
-        for_each = {
-          for key, value in try(vpn_client_configuration.value.root_certificates, {}) : key => value
-          if can(value.public_cert_data_file)
-        }
-
+        for_each = { for key, value in try(vpn_client_configuration.value.root_certificates, {}) : key => value if can(value.public_cert_data_file) }
         content {
           name             = root_certificate.value.name
           public_cert_data = file(root_certificate.value.public_cert_data_file)
         }
       }
       dynamic "root_certificate" {
-        for_each = {
-          for key, value in try(vpn_client_configuration.value.root_certificates, {}) : key => value
-          if can(value.public_cert_data_from_env_var_name)
-        }
-
+        for_each = { for key, value in try(vpn_client_configuration.value.root_certificates, {}) : key => value if can(value.public_cert_data_from_var) }
         content {
           name             = root_certificate.value.name
-          public_cert_data = data.azurecaf_environment_variable.name[root_certificate.key].value
+          public_cert_data = var.bootstrap_root_ca_public_pem
         }
       }
       dynamic "revoked_certificate" {
@@ -134,12 +113,13 @@ resource "azurerm_virtual_network_gateway" "vngw" {
     }
   }
 
+  enable_bgp    = try(var.settings.enable_bgp, null)
   dynamic "bgp_settings" {
-    for_each = try(var.settings.bgp_settings, {})
+    for_each = try(var.settings.bgp_settings,{})
     content {
-      asn         = bgp_settings.value.asn
-      peer_weight = bgp_settings.value.peer_weight
-
+      asn         = try(bgp_settings.value.asn, null)
+      # 1758 peer weight is optional, try/can to be used
+      peer_weight = try(bgp_settings.value.peer_weight,null)
       dynamic "peering_addresses" {
         for_each = try(bgp_settings.value.peering_addresses, {})
         content {
@@ -150,21 +130,9 @@ resource "azurerm_virtual_network_gateway" "vngw" {
     }
   }
 
-
-
   timeouts {
     create = "60m"
     delete = "60m"
   }
 
-}
-
-data "azurecaf_environment_variable" "name" {
-  for_each = {
-    for key, value in try(var.settings.vpn_client_configuration[keys(var.settings.vpn_client_configuration)[0]].root_certificates, {}) : key => value
-    if can(value.public_cert_data_from_env_var_name)
-  }
-
-  name           = each.value.public_cert_data_from_env_var_name
-  fails_if_empty = try(each.value.fails_if_empty, null)
 }
